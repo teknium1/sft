@@ -1,18 +1,37 @@
 import argparse
-import json
-import re
 from tqdm import tqdm
+from datasets import load_dataset, load_from_disk
 
-def contains_unwanted_words(text):
+def contains_unwanted_words(text, unwanted_words):
     """
-    This function checks if the input text contains any of the unwanted phrases.
-
+    Check if the input text contains any unwanted words or phrases.
+    
     Args:
-        text (str): The input text to be checked.
-
+        text (str): The input text.
+        unwanted_words (list): The list of unwanted words or phrases.
+        
     Returns:
-        bool: True if any unwanted phrase is found in the text, False otherwise.
+        bool: True if any unwanted word or phrase is found in the input text, False otherwise.
     """
+
+    for phrase in unwanted_words:
+        if phrase.lower() in text.lower():
+            return True
+    return False
+
+def main(args):
+    """
+    Main function to load the dataset, filter out the unwanted conversations,
+    and save the new dataset and the removed entries into separate files.
+    
+    Args:
+        args: Command line arguments.
+    """
+
+    in_file = args.in_file
+    out_file = args.out_file
+    removed_file = args.removed_file if args.removed_file else out_file.split(".")[0] + "_removed.json"
+
     unwanted_words = [
 		"text-based AI language model",
 		"please refrain",
@@ -97,46 +116,32 @@ def contains_unwanted_words(text):
 		"*This chat conversation is shared from",
 		"*This conversation is shared from"
     ]
-    for word in unwanted_words:
-        if word.lower() in text.lower():
-            return True
-    return False
+
+    from datasets import DatasetDict
+    dataset = DatasetDict.from_parquet({'train': in_file}) 
+    # Load the data into a Hugging Face dataset
+    if ".json" in in_file:
+        dataset = load_dataset("json", data_files=in_file)
+    elif ".parquet" in in_file:
+        dataset = load_dataset("parquet", data_files=in_file)
+
+    #dataset = load_from_disk()
+
+    # Use the filter method to separate the entries
+    new_dataset = dataset.filter(lambda x: not contains_unwanted_words(x['response'], unwanted_words))
+    removed_dataset = dataset.filter(lambda x: contains_unwanted_words(x['response'], unwanted_words))
+
+    print(f"Returned {len(new_dataset)} out of {len(dataset)}, start dump ...")
+    new_dataset.save_to_disk(out_file)
+
+    print(f"Removed {len(removed_dataset)} entries, dumping to removed file ...")
+    removed_dataset.save_to_disk(removed_file)
 
 if __name__ == "__main__":
-    """
-    This script reads a JSON dataset, filters out entries based on their output field,
-    and saves the cleaned data into a new JSON file. Entries that are filtered out can 
-    be saved into a separate JSON file if desired.
-
-    The script takes three arguments from the command line:
-        --in_file: The input JSON file.
-        --out_file: The output JSON file where cleaned entries are stored.
-        --removed_file: (optional) Where removed entries should be stored. If not provided, 
-                        removed entries will be stored in a file named {out_file}_removed.json.
-    """
-    parser = argparse.ArgumentParser(description='Removes most OpenAI disclaimers, refusals, etc from a JSON datasets output field.')
-    parser.add_argument('--in_file', type=str, help='Input JSON file', required=True)
-    parser.add_argument('--out_file', type=str, help='Output JSON file', required=True)
-    parser.add_argument('--removed_file', type=str, help='Removed entries JSON file', default=None)
+    parser = argparse.ArgumentParser(description='Removes most OpenAI disclaimers, refusals, etc from a dataset\'s output field.')
+    parser.add_argument('--in_file', type=str, help='Input file', required=True)
+    parser.add_argument('--out_file', type=str, help='Output file', required=True)
+    parser.add_argument('--removed_file', type=str, help='Removed entries file', default=None)
     args = parser.parse_args()
 
-    in_file = args.in_file
-    out_file = args.out_file
-    removed_file = args.removed_file if args.removed_file else out_file.split(".")[0] + "_removed.json"
-
-    content = json.load(open(in_file, "r", encoding='utf-8'))
-    num_conv = len(content)
-
-    new_content = []
-    removed_content = []
-    for conv in tqdm(content):
-        if not contains_unwanted_words(conv["output"]):
-            new_content.append(conv)
-        else:
-            removed_content.append(conv)
-
-    print(f"Returned {len(new_content)} out of {num_conv}, start dump ...")
-    json.dump(new_content, open(out_file, "w", encoding='utf-8'), indent=2)
-
-    print(f"Removed {len(removed_content)} entries, dumping to removed file ...")
-    json.dump(removed_content, open(removed_file, "w", encoding='utf-8'), indent=2)
+    main(args)
